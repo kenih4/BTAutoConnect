@@ -1,0 +1,21 @@
+test*
+log*
+.DS_store
+
+# Gradle
+.gradle/
+build/
+*/build/
+
+# Local configuration (SDK path, per-machine)
+local.properties
+
+# Android Studio / IntelliJ
+.idea/
+*.iml
+
+# Android
+*.apk
+*.ap_
+*.dex
+captures/
