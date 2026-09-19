@@ -25,26 +25,42 @@
             android:layout_marginTop="4dp"
             android:text="状態: 不明" />
 
+        <TextView
+            android:id="@+id/textBtPower"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textSize="16sp"
+            android:layout_marginTop="4dp"
+            android:text="Bluetooth: 不明" />
+
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="horizontal"
+            android:orientation="vertical"
             android:layout_marginTop="16dp">
 
             <Button
                 android:id="@+id/btnConnect"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
+                android:layout_width="match_parent"
+                android:layout_height="144dp"
+                android:textSize="24sp"
                 android:text="接続する" />
 
             <Button
                 android:id="@+id/btnOpenSettings"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:layout_marginStart="8dp"
+                android:layout_width="match_parent"
+                android:layout_height="144dp"
+                android:layout_marginTop="12dp"
+                android:textSize="24sp"
                 android:text="設定画面を開く" />
+
+            <Button
+                android:id="@+id/btnRunTermuxScript"
+                android:layout_width="match_parent"
+                android:layout_height="144dp"
+                android:layout_marginTop="12dp"
+                android:textSize="24sp"
+                android:text="Termuxでrun.shを実行" />
         </LinearLayout>
 
         <LinearLayout
