@@ -1,8 +1,10 @@
 package com.example.btautoconnect
 
 import android.Manifest
+import android.bluetooth.BluetoothA2dp
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
+import android.bluetooth.BluetoothHeadset
 import android.bluetooth.BluetoothProfile
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -14,6 +16,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.provider.Settings
 import android.widget.Button
 import android.widget.LinearLayout
@@ -47,6 +50,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var textTarget: TextView
     private lateinit var textStatus: TextView
     private lateinit var textBtPower: TextView
+    private lateinit var textProfiles: TextView
     private lateinit var btnConnect: Button
     private lateinit var btnOpenSettings: Button
     private lateinit var btnRunTermuxScript: Button
@@ -62,11 +66,27 @@ class MainActivity : AppCompatActivity() {
     private val maxReconnectAttempts = 5
     private val reconnectIntervalMs = 5000L
 
+    private var pendingVerify: Runnable? = null
+    private val pollIntervalMs = 1000L
+    private val waitForHfpMs = 30000L
+    private val waitForCarA2dpMs = 20000L
+    private val fallbackVerifyMs = 5000L
+    private var waitStartMs = 0L
+    private var hfpSeenMs = 0L
+    private var fallbackSentMs = 0L
+    private var waitNote: String? = null
+    private var autoConnectPending = false
+
     companion object {
         private const val PREFS_NAME = "bt_auto_connect_prefs"
         private const val KEY_TARGET_ADDRESS = "target_address"
         private const val KEY_AUTO_RECONNECT = "auto_reconnect"
         private const val KEY_HISTORY = "device_history"
+
+        private val COLOR_OK = android.graphics.Color.parseColor("#2E7D32")
+        private val COLOR_WARN = android.graphics.Color.parseColor("#EF6C00")
+        private val COLOR_NG = android.graphics.Color.parseColor("#C62828")
+        private val COLOR_NEUTRAL = android.graphics.Color.parseColor("#757575")
         private const val REQUEST_BT_PERMISSIONS = 100
         private const val REQUEST_TERMUX_PERMISSION = 101
         private const val TERMUX_PACKAGE = "com.termux"
@@ -88,6 +108,7 @@ class MainActivity : AppCompatActivity() {
                 loadBondedDevices()
             }
             refreshStatus()
+            if (a2dpProxy != null && headsetProxy != null) runAutoConnect()
         }
 
         override fun onServiceDisconnected(profile: Int) {
@@ -100,9 +121,13 @@ class MainActivity : AppCompatActivity() {
 
     private val aclReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
-            if (intent.action == BluetoothAdapter.ACTION_STATE_CHANGED) {
-                refreshStatus()
-                return
+            when (intent.action) {
+                BluetoothAdapter.ACTION_STATE_CHANGED,
+                BluetoothA2dp.ACTION_CONNECTION_STATE_CHANGED,
+                BluetoothHeadset.ACTION_CONNECTION_STATE_CHANGED -> {
+                    refreshStatus()
+                    return
+                }
             }
             val device: BluetoothDevice =intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
                 ?: return
@@ -144,6 +169,9 @@ class MainActivity : AppCompatActivity() {
         textTarget = findViewById(R.id.textTarget)
         textStatus = findViewById(R.id.textStatus)
         textBtPower = findViewById(R.id.textBtPower)
+        textProfiles = findViewById(R.id.textProfiles)
+        findViewById<TextView>(R.id.textBuildInfo).text =
+            "v${BuildConfig.VERSION_NAME} ・ ビルド日時: ${BuildConfig.BUILD_TIME}"
         btnConnect = findViewById(R.id.btnConnect)
         btnOpenSettings = findViewById(R.id.btnOpenSettings)
         btnRunTermuxScript = findViewById(R.id.btnRunTermuxScript)
@@ -155,6 +183,7 @@ class MainActivity : AppCompatActivity() {
             targetAddress = it.address
             prefs.edit().putString(KEY_TARGET_ADDRESS, it.address).apply()
         }
+        autoConnectPending = savedInstanceState == null && targetAddress != null
         switchAutoReconnect.isChecked = prefs.getBoolean(KEY_AUTO_RECONNECT, false)
         switchAutoReconnect.setOnCheckedChangeListener { _, checked ->
             prefs.edit().putBoolean(KEY_AUTO_RECONNECT, checked).apply()
@@ -170,6 +199,8 @@ class MainActivity : AppCompatActivity() {
                 addAction(BluetoothDevice.ACTION_ACL_CONNECTED)
                 addAction(BluetoothDevice.ACTION_ACL_DISCONNECTED)
                 addAction(BluetoothAdapter.ACTION_STATE_CHANGED)
+                addAction(BluetoothA2dp.ACTION_CONNECTION_STATE_CHANGED)
+                addAction(BluetoothHeadset.ACTION_CONNECTION_STATE_CHANGED)
             }
         )
 
@@ -178,7 +209,21 @@ class MainActivity : AppCompatActivity() {
             bluetoothAdapter.getProfileProxy(this, profileListener, BluetoothProfile.HEADSET)
             loadBondedDevices()
             refreshStatus()
+
+            if (autoConnectPending) {
+                if (!bluetoothAdapter.isEnabled) {
+                    runAutoConnect()
+                } else {
+                    reconnectHandler.postDelayed({ runAutoConnect() }, 3000)
+                }
+            }
         }
+    }
+
+    private fun runAutoConnect() {
+        if (!autoConnectPending) return
+        autoConnectPending = false
+        attemptConnect()
     }
 
     override fun onDestroy() {
@@ -390,33 +435,57 @@ class MainActivity : AppCompatActivity() {
 
     @SuppressWarnings("MissingPermission")
     private fun refreshStatus() {
-        textBtPower.text = if (bluetoothAdapter.isEnabled) "Bluetooth: ON" else "Bluetooth: OFF"
+        val btOn = bluetoothAdapter.isEnabled
+        setStatus(textBtPower, if (btOn) "Bluetooth: ON" else "Bluetooth: OFF", if (btOn) COLOR_OK else COLOR_NG)
         refreshTargetLabel()
         val addr = targetAddress
         if (addr == null) {
-            textStatus.text = "状態: 対象デバイス未選択"
+            setStatus(textStatus, "状態: 対象デバイス未選択", COLOR_WARN)
+            setStatus(textProfiles, "接続プロファイル: -", COLOR_NEUTRAL)
             return
         }
         if (!hasConnectPermission()) {
-            textStatus.text = "状態: 権限待ち"
+            setStatus(textStatus, "状態: 権限待ち", COLOR_WARN)
+            setStatus(textProfiles, "接続プロファイル: -", COLOR_NEUTRAL)
             return
         }
         val device = findBondedDevice(addr)
-        val connectedViaA2dp = a2dpProxy?.connectedDevices?.any { it.address == addr } ?: false
-        val connectedViaHeadset = headsetProxy?.connectedDevices?.any { it.address == addr } ?: false
-        textStatus.text = if (connectedViaA2dp || connectedViaHeadset) {
-            "状態: 接続中"
-        } else if (device != null) {
-            "状態: 未接続"
-        } else {
-            "状態: デバイス不明"
+        val connectedViaA2dp = isProfileConnected(a2dpProxy, addr)
+        val connectedViaHeadset = isProfileConnected(headsetProxy, addr)
+        val profileColor = when {
+            connectedViaA2dp && connectedViaHeadset -> COLOR_OK
+            connectedViaA2dp || connectedViaHeadset -> COLOR_WARN
+            else -> COLOR_NG
         }
+        setStatus(
+            textProfiles,
+            "接続プロファイル: " + profileSummary(connectedViaA2dp, connectedViaHeadset) +
+                (waitNote?.let { " ・$it" } ?: ""),
+            profileColor
+        )
+        if (connectedViaA2dp || connectedViaHeadset) {
+            setStatus(textStatus, "状態: 接続中", COLOR_OK)
+        } else if (device != null) {
+            setStatus(textStatus, "状態: 未接続", COLOR_NG)
+        } else {
+            setStatus(textStatus, "状態: デバイス不明", COLOR_WARN)
+        }
+    }
+
+    private fun setStatus(view: TextView, text: String, color: Int) {
+        view.text = text
+        view.setTextColor(color)
+        view.setTypeface(null, android.graphics.Typeface.BOLD)
     }
 
     // ---------- 接続 ----------
 
     @SuppressWarnings("MissingPermission")
     private fun attemptConnect(promptEnable: Boolean = true) {
+        pendingVerify?.let { reconnectHandler.removeCallbacks(it) }
+        pendingVerify = null
+        waitNote = null
+
         val addr = targetAddress
         if (addr == null) {
             Toast.makeText(this, "先にデバイスを選択してください", Toast.LENGTH_SHORT).show()
@@ -444,20 +513,103 @@ class MainActivity : AppCompatActivity() {
         }
         recordHistory(addr, device.name, touchTime = false)
 
-        val a2dpOk = tryHiddenConnect(a2dpProxy, device)
-        val headsetOk = tryHiddenConnect(headsetProxy, device)
+        if (isProfileConnected(a2dpProxy, addr) && isProfileConnected(headsetProxy, addr)) {
+            Toast.makeText(this, "すでに接続済みです(A2DP・HFP)", Toast.LENGTH_SHORT).show()
+            refreshStatus()
+            return
+        }
 
-        if (a2dpOk || headsetOk) {
-            Toast.makeText(this, "接続要求を送信しました", Toast.LENGTH_SHORT).show()
-            reconnectHandler.postDelayed({ refreshStatus() }, 1500)
-        } else {
+        // A2DPは車側から接続してくる機器が多く、先にスマホから要求すると拒否されるため、まずHFPだけ要求して待つ
+        if (!isProfileConnected(headsetProxy, addr)) {
+            val headsetOk = tryHiddenConnect(headsetProxy, device)
             Toast.makeText(
                 this,
-                "この端末では自動接続できませんでした。設定画面から手動で接続してください",
-                Toast.LENGTH_LONG
+                "HFP(通話)要求: ${if (headsetOk) "送信OK" else "失敗"}\n車側からの接続を待ちます",
+                Toast.LENGTH_SHORT
             ).show()
-            openBluetoothSettings()
         }
+
+        waitStartMs = SystemClock.elapsedRealtime()
+        hfpSeenMs = 0L
+        fallbackSentMs = 0L
+        pollConnection(addr)
+    }
+
+    private fun pollConnection(addr: String) {
+        pendingVerify = null
+        val now = SystemClock.elapsedRealtime()
+        val a2dp = isProfileConnected(a2dpProxy, addr)
+        val headset = isProfileConnected(headsetProxy, addr)
+        if (headset && hfpSeenMs == 0L) hfpSeenMs = now
+
+        if (a2dp && headset) {
+            waitNote = null
+            refreshStatus()
+            Toast.makeText(this, "接続完了 → A2DP(音楽)・HFP(通話)", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        var finished = false
+        if (!headset) {
+            val remain = (waitForHfpMs - (now - waitStartMs)) / 1000
+            if (remain <= 0) finished = true else waitNote = "HFP接続待ち(あと${remain}秒)"
+        } else if (!a2dp) {
+            if (fallbackSentMs == 0L) {
+                val remain = (waitForCarA2dpMs - (now - hfpSeenMs)) / 1000
+                if (remain > 0) {
+                    waitNote = "車側からのA2DP接続待ち(あと${remain}秒)"
+                } else {
+                    val device = findBondedDevice(addr)
+                    val ok = device != null && tryHiddenConnect(a2dpProxy, device)
+                    fallbackSentMs = now
+                    waitNote = "スマホ側からA2DP接続を試行中"
+                    Toast.makeText(
+                        this,
+                        "車側から接続されないため、スマホ側からA2DP接続を1回試します(要求: ${if (ok) "送信OK" else "失敗"})",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+            } else if (now - fallbackSentMs >= fallbackVerifyMs) {
+                finished = true
+            }
+        } else if (now - waitStartMs >= waitForHfpMs) {
+            finished = true
+        }
+
+        if (finished) {
+            waitNote = null
+            refreshStatus()
+            val summary = "A2DP(音楽): ${if (a2dp) "接続" else "未接続"} / " +
+                "HFP(通話): ${if (headset) "接続" else "未接続"}"
+            if (a2dp || headset) {
+                Toast.makeText(this, "一部のみ接続 → $summary", Toast.LENGTH_LONG).show()
+            } else {
+                Toast.makeText(
+                    this,
+                    "自動接続できませんでした。設定画面から手動で接続してください",
+                    Toast.LENGTH_LONG
+                ).show()
+                openBluetoothSettings()
+            }
+            return
+        }
+
+        refreshStatus()
+        val next = Runnable { pollConnection(addr) }
+        pendingVerify = next
+        reconnectHandler.postDelayed(next, pollIntervalMs)
+    }
+
+    @SuppressWarnings("MissingPermission")
+    private fun isProfileConnected(proxy: BluetoothProfile?, addr: String): Boolean =
+        proxy?.connectedDevices?.any { it.address == addr } ?: false
+
+    private fun profileSummary(a2dp: Boolean, headset: Boolean): String {
+        val parts = buildList {
+            if (a2dp) add("A2DP(音楽)")
+            if (headset) add("HFP(通話)")
+        }
+        return if (parts.isEmpty()) "なし" else parts.joinToString("・")
     }
 
     /**

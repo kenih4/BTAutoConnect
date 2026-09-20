@@ -1,3 +1,6 @@
+import java.text.SimpleDateFormat
+import java.util.Date
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -13,6 +16,13 @@ android {
         targetSdk = 34
         versionCode = 1
         versionName = "1.0"
+
+        val buildTime = SimpleDateFormat("yyyy/MM/dd HH:mm:ss").format(Date())
+        buildConfigField("String", "BUILD_TIME", "\"$buildTime\"")
+    }
+
+    buildFeatures {
+        buildConfig = true
     }
 
     buildTypes {
