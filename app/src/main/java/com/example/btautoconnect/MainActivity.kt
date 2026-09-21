@@ -14,6 +14,7 @@ import android.content.SharedPreferences
 import android.animation.ObjectAnimator
 import android.database.ContentObserver
 import android.media.AudioManager
+import android.media.ToneGenerator
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -598,6 +599,7 @@ class MainActivity : AppCompatActivity() {
             waitNote = null
             stopBlink()
             refreshStatus()
+            playConnectedSound()
             Toast.makeText(this, "接続完了 → A2DP(音楽)・HFP(通話)", Toast.LENGTH_SHORT).show()
             return
         }
@@ -692,6 +694,21 @@ class MainActivity : AppCompatActivity() {
         startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS))
     }
 
+    // ---------- 接続完了の効果音 ----------
+
+    private fun playConnectedSound() {
+        // 出力先がBluetoothへ切り替わるのを少し待ってから鳴らす
+        reconnectHandler.postDelayed({
+            try {
+                val tone = ToneGenerator(AudioManager.STREAM_MUSIC, 80)
+                tone.startTone(ToneGenerator.TONE_PROP_ACK, 300)
+                reconnectHandler.postDelayed({ tone.release() }, 800)
+            } catch (e: RuntimeException) {
+                // 効果音が出せなくても接続自体には影響しない
+            }
+        }, 600)
+    }
+
     // ---------- 接続試行中の点滅 ----------
 
     private fun startBlink() {
@@ -729,7 +746,10 @@ class MainActivity : AppCompatActivity() {
         val max = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
         val cur = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
         val percent = if (max > 0) cur * 100 / max else 0
-        setStatus(textVolume, "メディア音量: $percent% ($cur/$max)", COLOR_NEUTRAL)
+        // 0%=青(寒色) → 100%=赤(暖色)。文字として読める明るさに抑える
+        val hue = 240f * (1f - percent / 100f)
+        val color = android.graphics.Color.HSVToColor(floatArrayOf(hue, 0.9f, 0.7f))
+        setStatus(textVolume, "メディア音量: $percent% ($cur/$max)", color)
     }
 
     private fun openYoutubeMusic() {
