@@ -22,6 +22,7 @@
     <queries>
         <package android:name="com.termux" />
         <package android:name="com.google.android.apps.youtube.music" />
+        <package android:name="com.kenih4.morningreader" />
         <!-- MSAL(Microsoftサインイン)がブラウザ/認証アプリを検出するために必要 -->
         <package android:name="com.azure.authenticator" />
         <package android:name="com.microsoft.windowsintune.companyportal" />

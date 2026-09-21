@@ -71,6 +71,14 @@
                 android:text="設定画面を開く" />
 
             <Button
+                android:id="@+id/btnOpenMailReader"
+                android:layout_width="match_parent"
+                android:layout_height="144dp"
+                android:layout_marginTop="12dp"
+                android:textSize="24sp"
+                android:text="メール読み上げを起動" />
+
+            <Button
                 android:id="@+id/btnRunTermuxScript"
                 android:layout_width="match_parent"
                 android:layout_height="144dp"

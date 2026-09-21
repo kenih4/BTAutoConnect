@@ -116,6 +116,7 @@ class MainActivity : AppCompatActivity() {
         private const val REQUEST_TERMUX_PERMISSION = 101
         private const val TERMUX_PACKAGE = "com.termux"
         private const val YOUTUBE_MUSIC_PACKAGE = "com.google.android.apps.youtube.music"
+        private const val MAIL_READER_PACKAGE = "com.kenih4.morningreader"
         private const val TERMUX_RUN_COMMAND_PERMISSION = "com.termux.permission.RUN_COMMAND"
         private const val TERMUX_HOME = "/data/data/com.termux/files/home"
     }
@@ -223,6 +224,7 @@ class MainActivity : AppCompatActivity() {
         btnOpenSettings.setOnClickListener { openBluetoothSettings() }
         btnRunTermuxScript.setOnClickListener { runTermuxScript() }
         findViewById<Button>(R.id.btnOpenYoutubeMusic).setOnClickListener { openYoutubeMusic() }
+        findViewById<Button>(R.id.btnOpenMailReader).setOnClickListener { openMailReader() }
 
         teamsReader = TeamsChannelReader(this)
         tts = TextToSpeech(this) { status ->
@@ -845,6 +847,16 @@ class MainActivity : AppCompatActivity() {
         val hue = 240f * (1f - percent / 100f)
         val color = android.graphics.Color.HSVToColor(floatArrayOf(hue, 0.9f, 0.7f))
         setStatus(textVolume, "メディア音量: $percent% ($cur/$max)", color)
+    }
+
+    private fun openMailReader() {
+        val intent = packageManager.getLaunchIntentForPackage(MAIL_READER_PACKAGE)
+        if (intent == null) {
+            Toast.makeText(this, "メール読み上げがインストールされていません", Toast.LENGTH_LONG).show()
+            return
+        }
+        launchedOtherApp = true
+        startActivity(intent)
     }
 
     private fun openYoutubeMusic() {
