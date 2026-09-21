@@ -11,6 +11,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.SharedPreferences
+import android.database.ContentObserver
+import android.media.AudioManager
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -51,6 +53,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var textStatus: TextView
     private lateinit var textBtPower: TextView
     private lateinit var textProfiles: TextView
+    private lateinit var textVolume: TextView
+    private lateinit var audioManager: AudioManager
     private lateinit var btnConnect: Button
     private lateinit var btnOpenSettings: Button
     private lateinit var btnRunTermuxScript: Button
@@ -76,12 +80,20 @@ class MainActivity : AppCompatActivity() {
     private var fallbackSentMs = 0L
     private var waitNote: String? = null
     private var autoConnectPending = false
+    private var volumeAppliedOnA2dp = false
+
+    private val volumeObserver = object : ContentObserver(Handler(Looper.getMainLooper())) {
+        override fun onChange(selfChange: Boolean) {
+            refreshVolume()
+        }
+    }
 
     companion object {
         private const val PREFS_NAME = "bt_auto_connect_prefs"
         private const val KEY_TARGET_ADDRESS = "target_address"
         private const val KEY_AUTO_RECONNECT = "auto_reconnect"
         private const val KEY_HISTORY = "device_history"
+        private const val TARGET_VOLUME_PERCENT = 60
 
         private val COLOR_OK = android.graphics.Color.parseColor("#2E7D32")
         private val COLOR_WARN = android.graphics.Color.parseColor("#EF6C00")
@@ -90,6 +102,7 @@ class MainActivity : AppCompatActivity() {
         private const val REQUEST_BT_PERMISSIONS = 100
         private const val REQUEST_TERMUX_PERMISSION = 101
         private const val TERMUX_PACKAGE = "com.termux"
+        private const val YOUTUBE_MUSIC_PACKAGE = "com.google.android.apps.youtube.music"
         private const val TERMUX_RUN_COMMAND_PERMISSION = "com.termux.permission.RUN_COMMAND"
         private const val TERMUX_HOME = "/data/data/com.termux/files/home"
     }
@@ -170,6 +183,10 @@ class MainActivity : AppCompatActivity() {
         textStatus = findViewById(R.id.textStatus)
         textBtPower = findViewById(R.id.textBtPower)
         textProfiles = findViewById(R.id.textProfiles)
+        textVolume = findViewById(R.id.textVolume)
+        audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        contentResolver.registerContentObserver(Settings.System.CONTENT_URI, true, volumeObserver)
+        refreshVolume()
         findViewById<TextView>(R.id.textBuildInfo).text =
             "v${BuildConfig.VERSION_NAME} ・ ビルド日時: ${BuildConfig.BUILD_TIME}"
         btnConnect = findViewById(R.id.btnConnect)
@@ -192,6 +209,7 @@ class MainActivity : AppCompatActivity() {
         btnConnect.setOnClickListener { attemptConnect() }
         btnOpenSettings.setOnClickListener { openBluetoothSettings() }
         btnRunTermuxScript.setOnClickListener { runTermuxScript() }
+        findViewById<Button>(R.id.btnOpenYoutubeMusic).setOnClickListener { openYoutubeMusic() }
 
         registerReceiver(
             aclReceiver,
@@ -229,6 +247,7 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         unregisterReceiver(aclReceiver)
+        contentResolver.unregisterContentObserver(volumeObserver)
         a2dpProxy?.let { bluetoothAdapter.closeProfileProxy(BluetoothProfile.A2DP, it) }
         headsetProxy?.let { bluetoothAdapter.closeProfileProxy(BluetoothProfile.HEADSET, it) }
         reconnectHandler.removeCallbacksAndMessages(null)
@@ -513,6 +532,9 @@ class MainActivity : AppCompatActivity() {
         }
         recordHistory(addr, device.name, touchTime = false)
 
+        volumeAppliedOnA2dp = false
+        setMediaVolumePercent(TARGET_VOLUME_PERCENT)
+
         if (isProfileConnected(a2dpProxy, addr) && isProfileConnected(headsetProxy, addr)) {
             Toast.makeText(this, "すでに接続済みです(A2DP・HFP)", Toast.LENGTH_SHORT).show()
             refreshStatus()
@@ -541,6 +563,11 @@ class MainActivity : AppCompatActivity() {
         val a2dp = isProfileConnected(a2dpProxy, addr)
         val headset = isProfileConnected(headsetProxy, addr)
         if (headset && hfpSeenMs == 0L) hfpSeenMs = now
+
+        if (a2dp && !volumeAppliedOnA2dp) {
+            volumeAppliedOnA2dp = true
+            setMediaVolumePercent(TARGET_VOLUME_PERCENT)
+        }
 
         if (a2dp && headset) {
             waitNote = null
@@ -635,6 +662,35 @@ class MainActivity : AppCompatActivity() {
 
     private fun openBluetoothSettings() {
         startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS))
+    }
+
+    // ---------- 音量 ----------
+
+    private fun setMediaVolumePercent(percent: Int) {
+        val max = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+        val target = Math.round(max * percent / 100f).coerceIn(0, max)
+        try {
+            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, target, 0)
+        } catch (e: SecurityException) {
+            Toast.makeText(this, "音量を設定できませんでした", Toast.LENGTH_SHORT).show()
+        }
+        refreshVolume()
+    }
+
+    private fun refreshVolume() {
+        val max = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+        val cur = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+        val percent = if (max > 0) cur * 100 / max else 0
+        setStatus(textVolume, "メディア音量: $percent% ($cur/$max)", COLOR_NEUTRAL)
+    }
+
+    private fun openYoutubeMusic() {
+        val intent = packageManager.getLaunchIntentForPackage(YOUTUBE_MUSIC_PACKAGE)
+        if (intent == null) {
+            Toast.makeText(this, "YouTube Musicがインストールされていません", Toast.LENGTH_LONG).show()
+            return
+        }
+        startActivity(intent)
     }
 
     // ---------- Termux連携 ----------

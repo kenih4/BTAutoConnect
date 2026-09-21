@@ -18,6 +18,7 @@
     <!-- Android 11(API 30)以降のパッケージ可視性制限を回避し、Termuxの有無を判定できるようにする -->
     <queries>
         <package android:name="com.termux" />
+        <package android:name="com.google.android.apps.youtube.music" />
     </queries>
 
     <application

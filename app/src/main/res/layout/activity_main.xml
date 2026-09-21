@@ -41,6 +41,14 @@
             android:layout_marginTop="4dp"
             android:text="接続プロファイル: -" />
 
+        <TextView
+            android:id="@+id/textVolume"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textSize="16sp"
+            android:layout_marginTop="4dp"
+            android:text="メディア音量: -" />
+
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -69,6 +77,14 @@
                 android:layout_marginTop="12dp"
                 android:textSize="24sp"
                 android:text="Termuxでrun.shを実行" />
+
+            <Button
+                android:id="@+id/btnOpenYoutubeMusic"
+                android:layout_width="match_parent"
+                android:layout_height="144dp"
+                android:layout_marginTop="12dp"
+                android:textSize="24sp"
+                android:text="YouTube Musicを起動" />
         </LinearLayout>
 
         <LinearLayout
