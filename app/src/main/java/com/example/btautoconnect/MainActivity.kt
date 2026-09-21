@@ -11,6 +11,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.SharedPreferences
+import android.animation.ObjectAnimator
 import android.database.ContentObserver
 import android.media.AudioManager
 import android.content.pm.PackageManager
@@ -81,6 +82,9 @@ class MainActivity : AppCompatActivity() {
     private var waitNote: String? = null
     private var autoConnectPending = false
     private var volumeAppliedOnA2dp = false
+    private var wasStopped = false
+    private var blinkAnimator: ObjectAnimator? = null
+    private var launchedOtherApp = false
 
     private val volumeObserver = object : ContentObserver(Handler(Looper.getMainLooper())) {
         override fun onChange(selfChange: Boolean) {
@@ -244,10 +248,29 @@ class MainActivity : AppCompatActivity() {
         attemptConnect()
     }
 
+    override fun onStop() {
+        super.onStop()
+        wasStopped = true
+    }
+
+    override fun onStart() {
+        super.onStart()
+        if (!wasStopped) return
+        wasStopped = false
+        if (launchedOtherApp) {
+            launchedOtherApp = false
+            return
+        }
+        if (!autoConnectPending && ::bluetoothAdapter.isInitialized) {
+            attemptConnect(promptEnable = false)
+        }
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         unregisterReceiver(aclReceiver)
         contentResolver.unregisterContentObserver(volumeObserver)
+        blinkAnimator?.cancel()
         a2dpProxy?.let { bluetoothAdapter.closeProfileProxy(BluetoothProfile.A2DP, it) }
         headsetProxy?.let { bluetoothAdapter.closeProfileProxy(BluetoothProfile.HEADSET, it) }
         reconnectHandler.removeCallbacksAndMessages(null)
@@ -504,6 +527,7 @@ class MainActivity : AppCompatActivity() {
         pendingVerify?.let { reconnectHandler.removeCallbacks(it) }
         pendingVerify = null
         waitNote = null
+        stopBlink()
 
         val addr = targetAddress
         if (addr == null) {
@@ -554,6 +578,7 @@ class MainActivity : AppCompatActivity() {
         waitStartMs = SystemClock.elapsedRealtime()
         hfpSeenMs = 0L
         fallbackSentMs = 0L
+        startBlink()
         pollConnection(addr)
     }
 
@@ -571,6 +596,7 @@ class MainActivity : AppCompatActivity() {
 
         if (a2dp && headset) {
             waitNote = null
+            stopBlink()
             refreshStatus()
             Toast.makeText(this, "接続完了 → A2DP(音楽)・HFP(通話)", Toast.LENGTH_SHORT).show()
             return
@@ -605,6 +631,7 @@ class MainActivity : AppCompatActivity() {
 
         if (finished) {
             waitNote = null
+            stopBlink()
             refreshStatus()
             val summary = "A2DP(音楽): ${if (a2dp) "接続" else "未接続"} / " +
                 "HFP(通話): ${if (headset) "接続" else "未接続"}"
@@ -661,7 +688,28 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun openBluetoothSettings() {
+        launchedOtherApp = true
         startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS))
+    }
+
+    // ---------- 接続試行中の点滅 ----------
+
+    private fun startBlink() {
+        stopBlink()
+        btnConnect.text = "接続試行中…"
+        blinkAnimator = ObjectAnimator.ofFloat(btnConnect, "alpha", 1f, 0.25f).apply {
+            duration = 500
+            repeatMode = ObjectAnimator.REVERSE
+            repeatCount = ObjectAnimator.INFINITE
+            start()
+        }
+    }
+
+    private fun stopBlink() {
+        blinkAnimator?.cancel()
+        blinkAnimator = null
+        btnConnect.alpha = 1f
+        btnConnect.text = "接続する"
     }
 
     // ---------- 音量 ----------
@@ -690,6 +738,7 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, "YouTube Musicがインストールされていません", Toast.LENGTH_LONG).show()
             return
         }
+        launchedOtherApp = true
         startActivity(intent)
     }
 
@@ -737,6 +786,7 @@ class MainActivity : AppCompatActivity() {
                 putExtra("com.termux.RUN_COMMAND_SESSION_ACTION", "0")
             }
             try {
+                launchedOtherApp = true
                 ContextCompat.startForegroundService(this, intent)
             } catch (e: Exception) {
                 Toast.makeText(
