@@ -12,6 +12,9 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"
         android:maxSdkVersion="30" />
 
+    <!-- Microsoft Graph API(Teams)へのアクセスに必要 -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
     <!-- Termux (com.termux) にコマンド実行を依頼するために必要 -->
     <uses-permission android:name="com.termux.permission.RUN_COMMAND" />
 
@@ -19,6 +22,14 @@
     <queries>
         <package android:name="com.termux" />
         <package android:name="com.google.android.apps.youtube.music" />
+        <!-- MSAL(Microsoftサインイン)がブラウザ/認証アプリを検出するために必要 -->
+        <package android:name="com.azure.authenticator" />
+        <package android:name="com.microsoft.windowsintune.companyportal" />
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.BROWSABLE" />
+            <data android:scheme="https" />
+        </intent>
     </queries>
 
     <application
@@ -35,6 +46,21 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- MSALのリダイレクト受信。SIGNATURE_HASH は README の手順で求めた値に置き換える -->
+        <activity
+            android:name="com.microsoft.identity.client.BrowserTabActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="msauth"
+                    android:host="com.example.btautoconnect"
+                    android:path="/SIGNATURE_HASH" />
             </intent-filter>
         </activity>
     </application>

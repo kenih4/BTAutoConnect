@@ -22,11 +22,14 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.provider.Settings
+import android.speech.tts.TextToSpeech
 import android.widget.Button
+import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -85,6 +88,9 @@ class MainActivity : AppCompatActivity() {
     private var volumeAppliedOnA2dp = false
     private var wasStopped = false
     private var blinkAnimator: ObjectAnimator? = null
+    private lateinit var teamsReader: TeamsChannelReader
+    private var tts: TextToSpeech? = null
+    private var ttsReady = false
     private var launchedOtherApp = false
 
     private val volumeObserver = object : ContentObserver(Handler(Looper.getMainLooper())) {
@@ -98,6 +104,8 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_TARGET_ADDRESS = "target_address"
         private const val KEY_AUTO_RECONNECT = "auto_reconnect"
         private const val KEY_HISTORY = "device_history"
+        private const val KEY_TEAMS_TEAM = "teams_team"
+        private const val KEY_TEAMS_CHANNEL = "teams_channel"
         private const val TARGET_VOLUME_PERCENT = 60
 
         private val COLOR_OK = android.graphics.Color.parseColor("#2E7D32")
@@ -216,6 +224,21 @@ class MainActivity : AppCompatActivity() {
         btnRunTermuxScript.setOnClickListener { runTermuxScript() }
         findViewById<Button>(R.id.btnOpenYoutubeMusic).setOnClickListener { openYoutubeMusic() }
 
+        teamsReader = TeamsChannelReader(this)
+        tts = TextToSpeech(this) { status ->
+            if (status == TextToSpeech.SUCCESS) {
+                tts?.language = Locale.JAPAN
+                ttsReady = true
+            }
+        }
+        findViewById<Button>(R.id.btnReadTeams).apply {
+            setOnClickListener { readTeamsChannel() }
+            setOnLongClickListener {
+                showTeamsSettingsDialog()
+                true
+            }
+        }
+
         registerReceiver(
             aclReceiver,
             IntentFilter().apply {
@@ -272,6 +295,8 @@ class MainActivity : AppCompatActivity() {
         unregisterReceiver(aclReceiver)
         contentResolver.unregisterContentObserver(volumeObserver)
         blinkAnimator?.cancel()
+        tts?.stop()
+        tts?.shutdown()
         a2dpProxy?.let { bluetoothAdapter.closeProfileProxy(BluetoothProfile.A2DP, it) }
         headsetProxy?.let { bluetoothAdapter.closeProfileProxy(BluetoothProfile.HEADSET, it) }
         reconnectHandler.removeCallbacksAndMessages(null)
@@ -692,6 +717,76 @@ class MainActivity : AppCompatActivity() {
     private fun openBluetoothSettings() {
         launchedOtherApp = true
         startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS))
+    }
+
+    // ---------- Teamsチャンネルの読み上げ ----------
+
+    private fun readTeamsChannel() {
+        val speaker = tts
+        if (speaker != null && speaker.isSpeaking) {
+            speaker.stop()
+            Toast.makeText(this, "読み上げを停止しました", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val team = prefs.getString(KEY_TEAMS_TEAM, "").orEmpty()
+        val channel = prefs.getString(KEY_TEAMS_CHANNEL, "").orEmpty()
+        if (team.isBlank() || channel.isBlank()) {
+            showTeamsSettingsDialog()
+            return
+        }
+        if (!ttsReady) {
+            Toast.makeText(this, "音声合成の準備中です。少し待ってからもう一度押してください", Toast.LENGTH_SHORT).show()
+            return
+        }
+        Toast.makeText(this, "Teamsからメッセージを取得中…", Toast.LENGTH_SHORT).show()
+        teamsReader.fetch(team, channel, onSignInLaunch = { launchedOtherApp = true }) { result ->
+            result.onSuccess { speakTeamsMessages(channel, it) }
+            result.onFailure {
+                Toast.makeText(this, it.message ?: "取得に失敗しました", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    private fun speakTeamsMessages(channel: String, messages: List<TeamsChannelReader.Message>) {
+        val speaker = tts ?: return
+        if (messages.isEmpty()) {
+            speaker.speak("${channel}チャンネルに読み上げるメッセージはありません", TextToSpeech.QUEUE_FLUSH, null, "teams-none")
+            return
+        }
+        speaker.speak("${channel}チャンネルの最新${messages.size}件を読み上げます", TextToSpeech.QUEUE_FLUSH, null, "teams-head")
+        messages.forEachIndexed { i, m ->
+            speaker.speak("${m.sender}さん。${m.text.take(500)}", TextToSpeech.QUEUE_ADD, null, "teams-$i")
+        }
+    }
+
+    private fun showTeamsSettingsDialog() {
+        val pad = (16 * resources.displayMetrics.density).toInt()
+        val teamInput = EditText(this).apply {
+            hint = "チーム名"
+            setText(prefs.getString(KEY_TEAMS_TEAM, ""))
+        }
+        val channelInput = EditText(this).apply {
+            hint = "チャンネル名"
+            setText(prefs.getString(KEY_TEAMS_CHANNEL, ""))
+        }
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(pad, pad, pad, 0)
+            addView(teamInput)
+            addView(channelInput)
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Teamsの読み上げ対象")
+            .setView(layout)
+            .setPositiveButton("保存") { _, _ ->
+                prefs.edit()
+                    .putString(KEY_TEAMS_TEAM, teamInput.text.toString().trim())
+                    .putString(KEY_TEAMS_CHANNEL, channelInput.text.toString().trim())
+                    .apply()
+                Toast.makeText(this, "保存しました。ボタンを押すと読み上げます", Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton("キャンセル", null)
+            .show()
     }
 
     // ---------- 接続完了の効果音 ----------

@@ -1,0 +1,16 @@
+{
+  "client_id": "YOUR_CLIENT_ID",
+  "authorization_user_agent": "DEFAULT",
+  "redirect_uri": "msauth://com.example.btautoconnect/YOUR_URL_ENCODED_SIGNATURE_HASH",
+  "account_mode": "SINGLE",
+  "broker_redirect_uri_registered": false,
+  "authorities": [
+    {
+      "type": "AAD",
+      "audience": {
+        "type": "AzureADMyOrg",
+        "tenant_id": "YOUR_TENANT_ID"
+      }
+    }
+  ]
+}

@@ -49,3 +49,27 @@ Android は、ペアリング済みデバイスへの**接続を開始する**AP
   デバイスに自動接続」する機能を持っています)を使う
 - Tasker等のオートメーションアプリ+Accessibility Serviceで
   設定画面上のタップを自動操作する(遠回りですが非root環境でも動く場合があります)
+
+## Teamsチャンネルの読み上げ(Microsoft Graph API)
+
+「Teamsチャンネルを読み上げ」ボタンは、指定したチャンネルの最新メッセージ(最大5件)を
+Microsoft Graph APIで取得し、音声で読み上げます。ボタンを長押しすると対象の
+チーム名・チャンネル名を設定できます。読み上げ中にもう一度押すと停止します。
+
+利用には次の事前設定が必要です(自分の組織のAzure ADに登録します)。
+
+1. Azure portal の「アプリの登録」で新しいアプリを登録し、プラットフォームに
+   「Android」を追加する(パッケージ名: `com.example.btautoconnect`、署名ハッシュは手順3で求めた値)
+2. 「APIのアクセス許可」に、Microsoft Graphの委任された権限
+   `Team.ReadBasic.All` / `Channel.ReadBasic.All` / `ChannelMessage.Read.All` を追加する
+   (`ChannelMessage.Read.All` は多くの組織で**管理者の同意**が必要です)
+3. 署名ハッシュを求める(デバッグビルドの例)
+
+   ```bash
+   keytool -exportcert -alias androiddebugkey -keystore ~/.android/debug.keystore | openssl sha1 -binary | openssl base64
+   ```
+
+4. 次の2か所のプレースホルダを実際の値に置き換える
+   - `app/src/main/res/raw/auth_config.json` の `client_id` / `tenant_id` と、
+     `redirect_uri` 末尾の署名ハッシュ(URLエンコードした値。`+`→`%2B`、`/`→`%2F`、`=`→`%3D`)
+   - `app/src/main/AndroidManifest.xml` の `android:path="/SIGNATURE_HASH"`(エンコードしない値)
