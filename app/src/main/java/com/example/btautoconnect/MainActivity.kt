@@ -288,7 +288,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
         if (!autoConnectPending && ::bluetoothAdapter.isInitialized) {
-            attemptConnect(promptEnable = false)
+            attemptConnect()
         }
     }
 
