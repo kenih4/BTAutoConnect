@@ -104,6 +104,7 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_TARGET_ADDRESS = "target_address"
         private const val KEY_AUTO_RECONNECT = "auto_reconnect"
         private const val KEY_HISTORY = "device_history"
+        private const val KEY_DEFAULT_TARGET = "default_target_address"
         private const val KEY_TEAMS_TEAM = "teams_team"
         private const val KEY_TEAMS_CHANNEL = "teams_channel"
         private const val TARGET_VOLUME_PERCENT = 60
@@ -210,9 +211,15 @@ class MainActivity : AppCompatActivity() {
         containerDeviceList = findViewById(R.id.containerDeviceList)
 
         targetAddress = prefs.getString(KEY_TARGET_ADDRESS, null)
-        loadHistory().filter { it.lastConnected > 0 }.maxByOrNull { it.lastConnected }?.let {
-            targetAddress = it.address
-            prefs.edit().putString(KEY_TARGET_ADDRESS, it.address).apply()
+        val defaultAddress = prefs.getString(KEY_DEFAULT_TARGET, null)
+        if (defaultAddress != null) {
+            targetAddress = defaultAddress
+            prefs.edit().putString(KEY_TARGET_ADDRESS, defaultAddress).apply()
+        } else {
+            loadHistory().filter { it.lastConnected > 0 }.maxByOrNull { it.lastConnected }?.let {
+                targetAddress = it.address
+                prefs.edit().putString(KEY_TARGET_ADDRESS, it.address).apply()
+            }
         }
         autoConnectPending = savedInstanceState == null && targetAddress != null
         switchAutoReconnect.isChecked = prefs.getBoolean(KEY_AUTO_RECONNECT, false)
@@ -220,11 +227,15 @@ class MainActivity : AppCompatActivity() {
             prefs.edit().putBoolean(KEY_AUTO_RECONNECT, checked).apply()
         }
 
-        btnConnect.setOnClickListener { attemptConnect() }
+        btnConnect.setOnClickListener {
+            if (blinkAnimator != null) cancelConnectAttempt() else attemptConnect()
+        }
         btnOpenSettings.setOnClickListener { openBluetoothSettings() }
         btnRunTermuxScript.setOnClickListener { runTermuxScript() }
         findViewById<Button>(R.id.btnOpenYoutubeMusic).setOnClickListener { openYoutubeMusic() }
         findViewById<Button>(R.id.btnOpenMailReader).setOnClickListener { openMailReader() }
+
+        findViewById<android.widget.ImageButton>(R.id.btnSettings).setOnClickListener { showDefaultDeviceDialog() }
 
         teamsReader = TeamsChannelReader(this)
         tts = TextToSpeech(this) { status ->
@@ -473,6 +484,37 @@ class MainActivity : AppCompatActivity() {
         saveHistory(list)
     }
 
+    private fun showDefaultDeviceDialog() {
+        val entries = loadHistory().filter { it.lastConnected > 0 }.sortedByDescending { it.lastConnected }
+        if (entries.isEmpty()) {
+            Toast.makeText(this, "接続履歴がありません。一度接続するとここに表示されます", Toast.LENGTH_LONG).show()
+            return
+        }
+        val fmt = SimpleDateFormat("yyyy/MM/dd HH:mm", Locale.getDefault())
+        val labels = arrayOf("指定なし(最後に接続したデバイス)") +
+            entries.map { "${it.name}\n最終接続: ${fmt.format(Date(it.lastConnected))}" }
+        val current = prefs.getString(KEY_DEFAULT_TARGET, null)
+        val checked = entries.indexOfFirst { it.address == current }.let { if (it < 0) 0 else it + 1 }
+
+        AlertDialog.Builder(this)
+            .setTitle("起動時に接続する既定のデバイス")
+            .setSingleChoiceItems(labels, checked) { dialog, which ->
+                if (which == 0) {
+                    prefs.edit().remove(KEY_DEFAULT_TARGET).apply()
+                } else {
+                    val chosen = entries[which - 1]
+                    prefs.edit().putString(KEY_DEFAULT_TARGET, chosen.address)
+                        .putString(KEY_TARGET_ADDRESS, chosen.address).apply()
+                    targetAddress = chosen.address
+                    loadBondedDevices()
+                    refreshStatus()
+                }
+                dialog.dismiss()
+            }
+            .setNegativeButton("キャンセル", null)
+            .show()
+    }
+
     private fun removeHistory(address: String) {
         saveHistory(loadHistory().filter { it.address != address })
     }
@@ -608,6 +650,15 @@ class MainActivity : AppCompatActivity() {
         fallbackSentMs = 0L
         startBlink()
         pollConnection(addr)
+    }
+
+    private fun cancelConnectAttempt() {
+        pendingVerify?.let { reconnectHandler.removeCallbacks(it) }
+        pendingVerify = null
+        waitNote = null
+        stopBlink()
+        refreshStatus()
+        Toast.makeText(this, "接続試行を中断しました", Toast.LENGTH_SHORT).show()
     }
 
     private fun pollConnection(addr: String) {
