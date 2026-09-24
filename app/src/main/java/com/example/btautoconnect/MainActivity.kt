@@ -109,6 +109,13 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_TEAMS_CHANNEL = "teams_channel"
         private const val TARGET_VOLUME_PERCENT = 60
 
+        private val UUID_A2DP_SINK: java.util.UUID =
+            java.util.UUID.fromString("0000110b-0000-1000-8000-00805f9b34fb")
+        private val UUIDS_HANDS_FREE: Set<java.util.UUID> = setOf(
+            java.util.UUID.fromString("0000111e-0000-1000-8000-00805f9b34fb"),
+            java.util.UUID.fromString("00001108-0000-1000-8000-00805f9b34fb")
+        )
+
         private val COLOR_OK = android.graphics.Color.parseColor("#2E7D32")
         private val COLOR_WARN = android.graphics.Color.parseColor("#EF6C00")
         private val COLOR_NG = android.graphics.Color.parseColor("#C62828")
@@ -235,7 +242,7 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.btnOpenYoutubeMusic).setOnClickListener { openYoutubeMusic() }
         findViewById<Button>(R.id.btnOpenMailReader).setOnClickListener { openMailReader() }
 
-        findViewById<android.widget.ImageButton>(R.id.btnSettings).setOnClickListener { showDefaultDeviceDialog() }
+        findViewById<android.widget.ImageButton>(R.id.btnSettings).setOnClickListener { showSettingsMenu() }
 
         teamsReader = TeamsChannelReader(this)
         tts = TextToSpeech(this) { status ->
@@ -407,7 +414,8 @@ class MainActivity : AppCompatActivity() {
                 "接続履歴なし"
             }
             val unpaired = if (row.bonded) "" else " ・ペアリング解除済み(長押しで履歴削除)"
-            btn.text = "$marker${row.name}\n$last$unpaired"
+            val required = requiredProfiles(row.address).joinToString("・") { it.label }
+            btn.text = "$marker${row.name}\n$last$unpaired\n必要: $required"
             btn.isAllCaps = false
             btn.setOnClickListener {
                 targetAddress = row.address
@@ -440,7 +448,17 @@ class MainActivity : AppCompatActivity() {
         val lastConnected: Long
     )
 
-    private data class HistoryEntry(val address: String, val name: String, val lastConnected: Long)
+    private data class HistoryEntry(
+        val address: String,
+        val name: String,
+        val lastConnected: Long,
+        val requiredProfiles: Set<String>? = null
+    )
+
+    private enum class Profile(val key: String, val label: String) {
+        A2DP("A2DP", "A2DP(音楽)"),
+        HFP("HFP", "HFP(通話)")
+    }
 
     // ---------- 接続履歴 ----------
 
@@ -451,7 +469,10 @@ class MainActivity : AppCompatActivity() {
             MutableList(arr.length()) { i ->
                 val o = arr.getJSONObject(i)
                 val addr = o.getString("address")
-                HistoryEntry(addr, o.optString("name", addr), o.optLong("last", 0L))
+                val profiles = o.optJSONArray("profiles")?.let { a ->
+                    (0 until a.length()).map { a.getString(it) }.toSet()
+                }
+                HistoryEntry(addr, o.optString("name", addr), o.optLong("last", 0L), profiles)
             }
         } catch (e: Exception) {
             mutableListOf()
@@ -461,12 +482,12 @@ class MainActivity : AppCompatActivity() {
     private fun saveHistory(list: List<HistoryEntry>) {
         val arr = JSONArray()
         list.forEach {
-            arr.put(
-                JSONObject()
-                    .put("address", it.address)
-                    .put("name", it.name)
-                    .put("last", it.lastConnected)
-            )
+            val o = JSONObject()
+                .put("address", it.address)
+                .put("name", it.name)
+                .put("last", it.lastConnected)
+            it.requiredProfiles?.let { keys -> o.put("profiles", JSONArray(keys.toList())) }
+            arr.put(o)
         }
         prefs.edit().putString(KEY_HISTORY, arr.toString()).apply()
     }
@@ -478,11 +499,97 @@ class MainActivity : AppCompatActivity() {
         val entry = HistoryEntry(
             address,
             name ?: old?.name ?: address,
-            if (touchTime) System.currentTimeMillis() else old?.lastConnected ?: 0L
+            if (touchTime) System.currentTimeMillis() else old?.lastConnected ?: 0L,
+            old?.requiredProfiles
         )
         if (idx >= 0) list[idx] = entry else list.add(entry)
         saveHistory(list)
     }
+
+    private fun showSettingsMenu() {
+        val items = arrayOf("起動時に接続する既定のデバイス", "デバイスごとの必要な接続プロファイル")
+        AlertDialog.Builder(this)
+            .setTitle("設定")
+            .setItems(items) { _, which ->
+                if (which == 0) showDefaultDeviceDialog() else showProfileDeviceDialog()
+            }
+            .setNegativeButton("閉じる", null)
+            .show()
+    }
+
+    private fun connectedHistory(): List<HistoryEntry> =
+        loadHistory().filter { it.lastConnected > 0 }.sortedByDescending { it.lastConnected }
+
+    private fun showProfileDeviceDialog() {
+        val entries = connectedHistory()
+        if (entries.isEmpty()) {
+            Toast.makeText(this, "接続履歴がありません。一度接続するとここに表示されます", Toast.LENGTH_LONG).show()
+            return
+        }
+        val labels = entries.map { e ->
+            "${e.name}\n必要: ${requiredProfiles(e.address).joinToString("・") { it.label }}"
+        }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle("必要な接続プロファイルを設定するデバイス")
+            .setItems(labels) { _, which -> showRequiredProfilesDialog(entries[which]) }
+            .setNegativeButton("キャンセル", null)
+            .show()
+    }
+
+    private fun showRequiredProfilesDialog(entry: HistoryEntry) {
+        val all = Profile.values()
+        val current = requiredProfiles(entry.address)
+        val checked = BooleanArray(all.size) { all[it] in current }
+        AlertDialog.Builder(this)
+            .setTitle("${entry.name} の必要な接続プロファイル")
+            .setMultiChoiceItems(all.map { it.label }.toTypedArray(), checked) { _, i, isChecked ->
+                checked[i] = isChecked
+            }
+            .setPositiveButton("保存") { _, _ ->
+                val selected = all.filterIndexed { i, _ -> checked[i] }
+                if (selected.isEmpty()) {
+                    Toast.makeText(this, "1つ以上選択してください", Toast.LENGTH_SHORT).show()
+                } else {
+                    saveRequiredProfiles(entry.address, selected.map { it.key }.toSet())
+                }
+            }
+            .setNeutralButton("自動判定に戻す") { _, _ -> saveRequiredProfiles(entry.address, null) }
+            .setNegativeButton("キャンセル", null)
+            .show()
+    }
+
+    private fun saveRequiredProfiles(address: String, keys: Set<String>?) {
+        saveHistory(loadHistory().map { if (it.address == address) it.copy(requiredProfiles = keys) else it })
+        loadBondedDevices()
+        refreshStatus()
+    }
+
+    // ユーザー設定があればそれを、なければ機器が対応を宣言しているプロファイルを返す
+    private fun requiredProfiles(addr: String): Set<Profile> {
+        loadHistory().firstOrNull { it.address == addr }?.requiredProfiles?.let { keys ->
+            val set = Profile.values().filter { it.key in keys }.toSet()
+            if (set.isNotEmpty()) return set
+        }
+        val device = findBondedDevice(addr)
+        return (device?.let { detectProfiles(it) }) ?: Profile.values().toSet()
+    }
+
+    @SuppressWarnings("MissingPermission")
+    private fun detectProfiles(device: BluetoothDevice): Set<Profile>? {
+        val uuids = device.uuids?.map { it.uuid } ?: return null
+        val set = linkedSetOf<Profile>()
+        if (UUID_A2DP_SINK in uuids) set.add(Profile.A2DP)
+        if (uuids.any { it in UUIDS_HANDS_FREE }) set.add(Profile.HFP)
+        return set.ifEmpty { null }
+    }
+
+    private fun proxyFor(profile: Profile): BluetoothProfile? = when (profile) {
+        Profile.A2DP -> a2dpProxy
+        Profile.HFP -> headsetProxy
+    }
+
+    private fun profileStateText(need: Set<Profile>, connected: Set<Profile>): String =
+        need.joinToString(" / ") { "${it.label}: ${if (it in connected) "接続" else "未接続"}" }
 
     private fun showDefaultDeviceDialog() {
         val entries = loadHistory().filter { it.lastConnected > 0 }.sortedByDescending { it.lastConnected }
@@ -562,20 +669,20 @@ class MainActivity : AppCompatActivity() {
             return
         }
         val device = findBondedDevice(addr)
-        val connectedViaA2dp = isProfileConnected(a2dpProxy, addr)
-        val connectedViaHeadset = isProfileConnected(headsetProxy, addr)
+        val need = requiredProfiles(addr)
+        val connected = need.filter { isProfileConnected(proxyFor(it), addr) }.toSet()
         val profileColor = when {
-            connectedViaA2dp && connectedViaHeadset -> COLOR_OK
-            connectedViaA2dp || connectedViaHeadset -> COLOR_WARN
+            connected.size == need.size -> COLOR_OK
+            connected.isNotEmpty() -> COLOR_WARN
             else -> COLOR_NG
         }
         setStatus(
             textProfiles,
-            "接続プロファイル: " + profileSummary(connectedViaA2dp, connectedViaHeadset) +
+            "接続プロファイル: " + profileStateText(need, connected) +
                 (waitNote?.let { " ・$it" } ?: ""),
             profileColor
         )
-        if (connectedViaA2dp || connectedViaHeadset) {
+        if (Profile.values().any { isProfileConnected(proxyFor(it), addr) }) {
             setStatus(textStatus, "状態: 接続中", COLOR_OK)
         } else if (device != null) {
             setStatus(textStatus, "状態: 未接続", COLOR_NG)
@@ -629,14 +736,19 @@ class MainActivity : AppCompatActivity() {
         volumeAppliedOnA2dp = false
         setMediaVolumePercent(TARGET_VOLUME_PERCENT)
 
-        if (isProfileConnected(a2dpProxy, addr) && isProfileConnected(headsetProxy, addr)) {
-            Toast.makeText(this, "すでに接続済みです(A2DP・HFP)", Toast.LENGTH_SHORT).show()
+        val need = requiredProfiles(addr)
+        if (need.all { isProfileConnected(proxyFor(it), addr) }) {
+            Toast.makeText(
+                this,
+                "すでに接続済みです(${need.joinToString("・") { it.label }})",
+                Toast.LENGTH_SHORT
+            ).show()
             refreshStatus()
             return
         }
 
         // A2DPは車側から接続してくる機器が多く、先にスマホから要求すると拒否されるため、まずHFPだけ要求して待つ
-        if (!isProfileConnected(headsetProxy, addr)) {
+        if (Profile.HFP in need && !isProfileConnected(headsetProxy, addr)) {
             val headsetOk = tryHiddenConnect(headsetProxy, device)
             Toast.makeText(
                 this,
@@ -664,8 +776,12 @@ class MainActivity : AppCompatActivity() {
     private fun pollConnection(addr: String) {
         pendingVerify = null
         val now = SystemClock.elapsedRealtime()
+        val need = requiredProfiles(addr)
+        val needA2dp = Profile.A2DP in need
+        val needHfp = Profile.HFP in need
         val a2dp = isProfileConnected(a2dpProxy, addr)
         val headset = isProfileConnected(headsetProxy, addr)
+        val connected = need.filter { isProfileConnected(proxyFor(it), addr) }.toSet()
         if (headset && hfpSeenMs == 0L) hfpSeenMs = now
 
         if (a2dp && !volumeAppliedOnA2dp) {
@@ -673,22 +789,23 @@ class MainActivity : AppCompatActivity() {
             setMediaVolumePercent(TARGET_VOLUME_PERCENT)
         }
 
-        if (a2dp && headset) {
+        if (connected.size == need.size) {
             waitNote = null
             stopBlink()
             refreshStatus()
             playConnectedSound()
-            Toast.makeText(this, "接続完了 → A2DP(音楽)・HFP(通話)", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "接続完了 → ${need.joinToString("・") { it.label }}", Toast.LENGTH_SHORT).show()
             return
         }
 
         var finished = false
-        if (!headset) {
+        if (needHfp && !headset) {
             val remain = (waitForHfpMs - (now - waitStartMs)) / 1000
             if (remain <= 0) finished = true else waitNote = "HFP接続待ち(あと${remain}秒)"
-        } else if (!a2dp) {
+        } else if (needA2dp && !a2dp) {
             if (fallbackSentMs == 0L) {
-                val remain = (waitForCarA2dpMs - (now - hfpSeenMs)) / 1000
+                val reference = if (needHfp) hfpSeenMs else waitStartMs
+                val remain = (waitForCarA2dpMs - (now - reference)) / 1000
                 if (remain > 0) {
                     waitNote = "車側からのA2DP接続待ち(あと${remain}秒)"
                 } else {
@@ -705,18 +822,14 @@ class MainActivity : AppCompatActivity() {
             } else if (now - fallbackSentMs >= fallbackVerifyMs) {
                 finished = true
             }
-        } else if (now - waitStartMs >= waitForHfpMs) {
-            finished = true
         }
 
         if (finished) {
             waitNote = null
             stopBlink()
             refreshStatus()
-            val summary = "A2DP(音楽): ${if (a2dp) "接続" else "未接続"} / " +
-                "HFP(通話): ${if (headset) "接続" else "未接続"}"
-            if (a2dp || headset) {
-                Toast.makeText(this, "一部のみ接続 → $summary", Toast.LENGTH_LONG).show()
+            if (connected.isNotEmpty()) {
+                Toast.makeText(this, "一部のみ接続 → ${profileStateText(need, connected)}", Toast.LENGTH_LONG).show()
             } else {
                 Toast.makeText(
                     this,
@@ -737,14 +850,6 @@ class MainActivity : AppCompatActivity() {
     @SuppressWarnings("MissingPermission")
     private fun isProfileConnected(proxy: BluetoothProfile?, addr: String): Boolean =
         proxy?.connectedDevices?.any { it.address == addr } ?: false
-
-    private fun profileSummary(a2dp: Boolean, headset: Boolean): String {
-        val parts = buildList {
-            if (a2dp) add("A2DP(音楽)")
-            if (headset) add("HFP(通話)")
-        }
-        return if (parts.isEmpty()) "なし" else parts.joinToString("・")
-    }
 
     /**
      * BluetoothProfile(A2DP/HEADSET)の隠しメソッド connect(BluetoothDevice) を

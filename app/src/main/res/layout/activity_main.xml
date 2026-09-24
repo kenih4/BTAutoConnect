@@ -95,14 +95,6 @@
                 android:text="メール読み上げを起動" />
 
             <Button
-                android:id="@+id/btnRunTermuxScript"
-                android:layout_width="match_parent"
-                android:layout_height="144dp"
-                android:layout_marginTop="12dp"
-                android:textSize="24sp"
-                android:text="Termuxでrun.shを実行" />
-
-            <Button
                 android:id="@+id/btnOpenYoutubeMusic"
                 android:layout_width="match_parent"
                 android:layout_height="144dp"
@@ -117,6 +109,14 @@
                 android:layout_marginTop="12dp"
                 android:textSize="24sp"
                 android:text="Teamsチャンネルを読み上げ" />
+
+            <Button
+                android:id="@+id/btnRunTermuxScript"
+                android:layout_width="match_parent"
+                android:layout_height="144dp"
+                android:layout_marginTop="12dp"
+                android:textSize="24sp"
+                android:text="Termuxでrun.shを実行" />
         </LinearLayout>
 
         <LinearLayout
